@@ -176,7 +176,14 @@ async def wait_until_next_run():
 
 async def main():
     print("Starting link checker service...")
-    print("Waiting for initial 10 AM EST check time...")
+    
+    # Initial startup delay to ensure deployment is complete
+    startup_delay = 60  # 1 minute
+    print(f"Waiting {startup_delay} seconds for deployment to stabilize...")
+    await asyncio.sleep(startup_delay)
+    
+    print("Service started successfully!")
+    send_slack_message("🚀 Link checker service started and waiting for next 10 AM EST check")
     
     # Wait for first 10 AM run
     await wait_until_next_run()
