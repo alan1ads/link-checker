@@ -175,12 +175,18 @@ async def wait_until_next_run():
     await asyncio.sleep(wait_seconds)
 
 async def main():
+    print("Starting link checker service...")
+    print("Waiting for initial 10 AM EST check time...")
+    
+    # Wait for first 10 AM run
+    await wait_until_next_run()
+    
     while True:
+        print("\nStarting URL check cycle...")
         await check_links()
         await wait_until_next_run()
 
 if __name__ == "__main__":
-    # Install pytz if not already installed
     try:
         import pytz
     except ImportError:
@@ -188,5 +194,9 @@ if __name__ == "__main__":
         import subprocess
         subprocess.check_call(["pip", "install", "pytz"])
         import pytz
+    
+    # Add startup delay to ensure proper deployment
+    print("Service initializing...")
+    time.sleep(30)  # Wait 30 seconds for deployment to stabilize
     
     asyncio.run(main())
