@@ -126,14 +126,46 @@ async def check_links():
                 
                 try:
                     response = requests.get(domain, timeout=30)
-                    if response.status_code != 200:
-                        error_msg = f"🚨 URL down: {domain}\nStatus: {response.status_code}"
+                    
+                    # Skip 404 errors as they're considered "good" now
+                    if response.status_code == 404:
+                        print(f"✓ URL returns 404 (acceptable): {domain}")
+                        continue
+                        
+                    # Check for domain expiration in the response text
+                    response_text = response.text.lower()
+                    expiration_phrases = [
+                        "domain has expired",
+                        "renew now",
+                        "domain expired",
+                        "this domain expired",
+                        "domain registration expired",
+                        "domain name expired",
+                        "expired on",
+                        "parked domain",
+                        "domain is expired"
+                    ]
+                    
+                    if any(phrase in response_text for phrase in expiration_phrases):
+                        error_msg = f"🕒 Expired domain detected: {domain}"
                         failing_domains.append(error_msg)
                         print(error_msg)
+                        continue
+                        
+                    # Check for other non-200 status codes
+                    if response.status_code != 200:
+                        error_msg = f"🚨 URL not accessible: {domain}\nStatus: {response.status_code}"
+                        failing_domains.append(error_msg)
+                        print(error_msg)
+                        
                 except requests.exceptions.RequestException as e:
-                    error_msg = f"⚠️ Error accessing URL: {domain}\nError: {str(e)}"
-                    failing_domains.append(error_msg)
-                    print(error_msg)
+                    # Only report connection errors and timeouts
+                    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+                        error_msg = f"⚠️ Cannot reach URL: {domain}\nError: Connection failed or timed out"
+                        failing_domains.append(error_msg)
+                        print(error_msg)
+                    else:
+                        print(f"Skipping other error for {domain}: {str(e)}")
             
             print(f"\nChecked {checked_count} URLs")
             
