@@ -278,9 +278,15 @@ async def main():
     await asyncio.sleep(startup_delay)
     
     print("Service started successfully!")
-    send_slack_message("🚀 Link checker service started and waiting for next 10 AM EST check")
+    send_slack_message("🚀 Link checker service started - Running initial check...")
     
-    # Wait for first 10 AM run
+    # Run an immediate check for testing
+    print("\nRunning initial URL check...")
+    await check_links()
+    print("Initial check completed. Switching to daily schedule.")
+    send_slack_message("✅ Initial check completed. Now waiting for next scheduled check at 10 AM EST")
+    
+    # Wait for next 10 AM run
     await wait_until_next_run()
     
     while True:
