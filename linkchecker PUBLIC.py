@@ -199,22 +199,36 @@ async def check_links():
         print(f"Error in check_links: {e}")
         send_slack_message(f"❌ Error in check_links: {str(e)}")
 
+async def wait_until_next_run():
+    est = pytz.timezone('US/Eastern')
+    now = datetime.now(est)
+    target = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    
+    # If it's already past 10 AM today, schedule for tomorrow
+    if now >= target:
+        target += timedelta(days=1)
+    
+    # Calculate wait time
+    wait_seconds = (target - now).total_seconds()
+    print(f"\nWaiting until {target.strftime('%Y-%m-%d %H:%M:%S %Z')} to run next check")
+    await asyncio.sleep(wait_seconds)
+
 async def main():
     print("Starting link checker service...")
-    
-    # Initial startup delay to ensure deployment is complete
     startup_delay = 60  # 1 minute
     print(f"Waiting {startup_delay} seconds for deployment to stabilize...")
     await asyncio.sleep(startup_delay)
     
     print("Service started successfully!")
-    send_slack_message("🚀 Link checker service started")
+    send_slack_message("🚀 Link checker service started and waiting for next 10 AM EST check")
+    
+    # Wait for first 10 AM run
+    await wait_until_next_run()
     
     while True:
         print("\nStarting URL check cycle...")
         await check_links()
-        print(f"\nWaiting {CHECK_INTERVAL/60} minutes until next check")
-        await asyncio.sleep(CHECK_INTERVAL)
+        await wait_until_next_run()
 
 if __name__ == "__main__":
     try:
