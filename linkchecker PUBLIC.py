@@ -9,6 +9,7 @@ import pytz  # Add this import for timezone handling
 import os
 from dotenv import load_dotenv
 import re
+from bs4 import BeautifulSoup  # Add BeautifulSoup for better HTML parsing
 
 # Load environment variables
 load_dotenv()
@@ -62,6 +63,54 @@ def is_valid_url(url):
         r'(?::\d+)?'  # optional port
         r'(?:/?|[/?]\S+)$', re.IGNORECASE)
     return bool(url_pattern.match(url))
+
+def get_domain_expiration_indicators():
+    return [
+        # Basic expiration messages
+        'domain has expired', 'is this your domain', 'renew now',
+        'domain registration expired', 'this domain has expired',
+        'domain name has expired', 'domain expired', 'expired domain',
+        'renew domain', 'domain not found', 'domain renewal',
+        'this domain is not active', 'domain has been expired',
+        'domain expiration notice',
+        
+        # Additional subtle indicators
+        'this domain may be for sale',
+        'buy this domain',
+        'domain seized',
+        'domain auction',
+        'domain listed',
+        'backorder this domain',
+        'inquire about this domain',
+        'purchase this domain',
+        'this webpage is not available',
+        'this site is temporarily unavailable',
+        'website expired',
+        'account suspended',
+        'this domain is pending renewal or has expired',
+        'domain registration is pending',
+        
+        # Parking service indicators
+        'parked domain',
+        'domain parking',
+        'this domain is parked',
+        'domain holder',
+        'domain registered',
+        
+        # Registration-related
+        'registration expired',
+        'registrar holding page',
+        'register this domain',
+        'domain registration',
+        'registration services',
+        
+        # Common parking services
+        'sedoparking',
+        'hugedomains',
+        'godaddy auctions',
+        'namesilo parking',
+        'domain registration pending',
+    ]
 
 async def check_links():
     try:
@@ -137,33 +186,42 @@ async def check_links():
                     # Get the full page content
                     response_text = response.text.lower()
                     
-                    # Common expiration indicators
-                    expiration_indicators = [
-                        'domain has expired',
-                        'is this your domain',
-                        'renew now',
-                        'domain registration expired',
-                        'this domain has expired',
-                        'domain name has expired',
-                        'domain expired',
-                        'expired domain',
-                        'renew domain',
-                        'domain not found',
-                        'domain renewal',
-                        'this domain is not active',
-                        'domain has been expired',
-                        'domain expiration notice'
-                    ]
+                    # Parse HTML for better analysis
+                    soup = BeautifulSoup(response_text, 'html.parser')
+                    
+                    # Check meta tags and title
+                    meta_content = ' '.join([meta.get('content', '').lower() for meta in soup.find_all('meta')])
+                    title_content = soup.title.string.lower() if soup.title else ''
+                    
+                    # Get all text content including hidden elements
+                    all_text = ' '.join([text.lower() for text in soup.stripped_strings])
+                    
+                    # Combine all content for checking
+                    combined_content = f"{response_text} {meta_content} {title_content} {all_text}"
+                    
+                    # Get expiration indicators
+                    expiration_indicators = get_domain_expiration_indicators()
                     
                     # Count how many indicators we find
-                    found_indicators = [ind for ind in expiration_indicators if ind in response_text]
+                    found_indicators = [ind for ind in expiration_indicators if ind in combined_content]
                     
-                    # Consider domain expired if we find at least 2 indicators
-                    if len(found_indicators) >= 2:
+                    # Check for parking page patterns
+                    parking_patterns = [
+                        lambda s: bool(re.search(r'domain.*(?:sale|expired|buy)', s)),
+                        lambda s: bool(re.search(r'(?:buy|purchase).*domain', s)),
+                        lambda s: bool(re.search(r'(?:parked|parking).*domain', s)),
+                    ]
+                    
+                    pattern_matches = [p(combined_content) for p in parking_patterns]
+                    
+                    # Consider domain expired if we find at least 2 indicators or pattern matches
+                    if len(found_indicators) >= 2 or sum(pattern_matches) >= 2:
                         error_msg = f"🕒 Expired domain detected: {domain}\nFound indicators: {', '.join(found_indicators)}"
                         failing_domains.append(error_msg)
                         print(error_msg)
                         continue
+                        
+                    print(f"✓ URL appears healthy: {domain}")
                         
                 except requests.exceptions.RequestException as e:
                     # Only report connection errors and timeouts
