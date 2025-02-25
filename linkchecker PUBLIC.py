@@ -171,12 +171,15 @@ async def check_links():
             
             for domain in domains:
                 checked_count += 1
-                print(f"Checking URL {checked_count}: {domain}")
+                print(f"\nChecking URL {checked_count}/{len(domains)}: {domain}")
                 
                 try:
+                    print(f"Making request to: {domain}")
                     response = requests.get(domain, timeout=30, headers={
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                     })
+                    
+                    print(f"Response status code: {response.status_code}")
                     
                     # Skip 404 errors as they're considered "good" now
                     if response.status_code == 404:
@@ -184,28 +187,49 @@ async def check_links():
                         continue
                     
                     # Get the full page content
+                    print("Getting page content...")
                     response_text = response.text.lower()
                     
                     # Parse HTML for better analysis
+                    print("Parsing HTML content...")
                     soup = BeautifulSoup(response_text, 'html.parser')
                     
-                    # Check meta tags and title
-                    meta_content = ' '.join([meta.get('content', '').lower() for meta in soup.find_all('meta')])
-                    title_content = soup.title.string.lower() if soup.title else ''
+                    # Check meta tags and title with proper error handling
+                    print("Analyzing page elements...")
+                    meta_content = ''
+                    try:
+                        meta_tags = soup.find_all('meta')
+                        meta_content = ' '.join([meta.get('content', '').lower() for meta in meta_tags if meta.get('content')])
+                    except Exception as e:
+                        print(f"Warning: Error processing meta tags: {str(e)}")
+                    
+                    title_content = ''
+                    try:
+                        if soup.title and soup.title.string:
+                            title_content = soup.title.string.lower()
+                    except Exception as e:
+                        print(f"Warning: Error processing title: {str(e)}")
                     
                     # Get all text content including hidden elements
-                    all_text = ' '.join([text.lower() for text in soup.stripped_strings])
+                    all_text = ''
+                    try:
+                        all_text = ' '.join([text.lower() for text in soup.stripped_strings])
+                    except Exception as e:
+                        print(f"Warning: Error processing page text: {str(e)}")
                     
                     # Combine all content for checking
+                    print("Combining content for analysis...")
                     combined_content = f"{response_text} {meta_content} {title_content} {all_text}"
                     
                     # Get expiration indicators
                     expiration_indicators = get_domain_expiration_indicators()
                     
                     # Count how many indicators we find
+                    print("Checking for expiration indicators...")
                     found_indicators = [ind for ind in expiration_indicators if ind in combined_content]
                     
                     # Check for parking page patterns
+                    print("Checking parking patterns...")
                     parking_patterns = [
                         lambda s: bool(re.search(r'domain.*(?:sale|expired|buy)', s)),
                         lambda s: bool(re.search(r'(?:buy|purchase).*domain', s)),
@@ -220,28 +244,30 @@ async def check_links():
                         failing_domains.append(error_msg)
                         print(error_msg)
                         continue
-                        
+                    
                     print(f"✓ URL appears healthy: {domain}")
-                        
+                    
                 except requests.exceptions.RequestException as e:
-                    # Only report connection errors and timeouts
+                    error_msg = f"⚠️ Error checking URL {domain}: {str(e)}"
+                    print(error_msg)
                     if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
-                        error_msg = f"⚠️ Cannot reach URL: {domain}\nError: Connection failed or timed out"
                         failing_domains.append(error_msg)
-                        print(error_msg)
-                    else:
-                        print(f"Skipping other error for {domain}: {str(e)}")
+                except Exception as e:
+                    error_msg = f"❌ Unexpected error checking URL {domain}: {str(e)}"
+                    print(error_msg)
+                    failing_domains.append(error_msg)
             
             print(f"\nChecked {checked_count} URLs")
             
             if failing_domains:
+                print("\nSending notifications for failing domains...")
                 batch_size = 20
                 for i in range(0, len(failing_domains), batch_size):
                     batch = failing_domains[i:i + batch_size]
                     message = "URL Check Results:\n" + "\n".join(batch)
                     send_slack_message(message)
             else:
-                print("All URLs are healthy")
+                print("\nAll URLs are healthy")
                 send_slack_message("✅ All URLs are functioning correctly")
                 
         except gspread.exceptions.APIError as e:
@@ -254,8 +280,9 @@ async def check_links():
             send_slack_message(f"❌ {error_msg}")
             
     except Exception as e:
-        print(f"Error in check_links: {e}")
-        send_slack_message(f"❌ Error in check_links: {str(e)}")
+        error_msg = f"Critical error in check_links: {str(e)}"
+        print(error_msg)
+        send_slack_message(f"❌ {error_msg}")
 
 async def wait_until_next_run():
     est = pytz.timezone('US/Eastern')
