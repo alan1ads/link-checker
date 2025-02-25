@@ -65,52 +65,104 @@ def is_valid_url(url):
     return bool(url_pattern.match(url))
 
 def get_domain_expiration_indicators():
-    return [
-        # Basic expiration messages
-        'domain has expired', 'is this your domain', 'renew now',
-        'domain registration expired', 'this domain has expired',
-        'domain name has expired', 'domain expired', 'expired domain',
-        'renew domain', 'domain not found', 'domain renewal',
-        'this domain is not active', 'domain has been expired',
-        'domain expiration notice',
-        
-        # Additional subtle indicators
-        'this domain may be for sale',
-        'buy this domain',
-        'domain seized',
-        'domain auction',
-        'domain listed',
-        'backorder this domain',
-        'inquire about this domain',
-        'purchase this domain',
-        'this webpage is not available',
-        'this site is temporarily unavailable',
-        'website expired',
-        'account suspended',
-        'this domain is pending renewal or has expired',
-        'domain registration is pending',
-        
-        # Parking service indicators
-        'parked domain',
-        'domain parking',
-        'this domain is parked',
-        'domain holder',
-        'domain registered',
-        
-        # Registration-related
-        'registration expired',
-        'registrar holding page',
-        'register this domain',
-        'domain registration',
-        'registration services',
-        
-        # Common parking services
-        'sedoparking',
-        'hugedomains',
-        'godaddy auctions',
-        'namesilo parking',
-        'domain registration pending',
+    return {
+        # Definitive expiration messages (these almost always indicate a truly expired domain)
+        'definitive': [
+            'this domain has expired and is pending renewal or deletion',
+            'domain has expired and is pending renewal',
+            'this domain expired on',
+            'this domain name has expired',
+            'domain name registration has expired',
+            'this domain name expired on',
+            'this domain has expired and is now suspended',
+        ],
+        # Common registrar expiration pages
+        'registrar_patterns': [
+            'godaddy.com/expired',
+            'expired.namecheap.com',
+            'expired.domain',
+            'domainexpired',
+            'domain-expired',
+        ]
+    }
+
+def analyze_domain_status(content, domain, response_url, title):
+    """
+    Analyze domain content to determine if it's truly expired.
+    Uses multiple factors including URL, title, and content patterns.
+    """
+    indicators = get_domain_expiration_indicators()
+    
+    # Check if we were redirected to a known expiration page
+    for pattern in indicators['registrar_patterns']:
+        if pattern in response_url.lower():
+            return True, f"Redirected to registrar expiration page: {response_url}"
+    
+    # Look for definitive expiration messages
+    for msg in indicators['definitive']:
+        if msg in content:
+            # Verify the context isn't part of a news article or blog post
+            # by checking if it appears in a prominent position
+            soup = BeautifulSoup(content, 'html.parser')
+            main_content = soup.find('main') or soup.find('body')
+            if main_content:
+                first_paragraph = main_content.find('p')
+                if first_paragraph and msg in first_paragraph.text.lower():
+                    return True, f"Found definitive expiration message in main content: {msg}"
+    
+    # Check for specific expiration patterns that are highly reliable
+    expiration_patterns = [
+        # Date-based expiration messages
+        r'domain\s+expired\s+on\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}',
+        r'expiration\s+date:\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}',
+        # Registrar-specific patterns
+        r'registrar:\s+domain\s+expired',
+        r'domain\s+status:\s+expired',
     ]
+    
+    for pattern in expiration_patterns:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if match:
+            # Extract the matched text for context
+            return True, f"Found specific expiration pattern: {match.group(0)}"
+    
+    # Check page title for definitive indicators
+    if title:
+        title_lower = title.lower()
+        if any(msg in title_lower for msg in indicators['definitive']):
+            return True, f"Found expiration message in page title: {title}"
+    
+    # Check for common expired domain parking pages
+    parking_indicators = {
+        'title_patterns': [
+            'expired domain',
+            'domain expired',
+            'expired website',
+        ],
+        'content_patterns': [
+            'this domain has expired',
+            'renew this domain',
+            'domain registration expired',
+        ]
+    }
+    
+    # Only consider parking if we see multiple strong indicators
+    parking_matches = []
+    if title:
+        title_lower = title.lower()
+        for pattern in parking_indicators['title_patterns']:
+            if pattern in title_lower:
+                parking_matches.append(f"Title: {pattern}")
+    
+    for pattern in parking_indicators['content_patterns']:
+        if pattern in content:
+            parking_matches.append(f"Content: {pattern}")
+    
+    # Require at least two strong parking indicators
+    if len(parking_matches) >= 2:
+        return True, f"Multiple parking indicators found: {', '.join(parking_matches)}"
+    
+    return False, None
 
 async def check_links():
     try:
@@ -177,83 +229,73 @@ async def check_links():
                     print(f"Making request to: {domain}")
                     response = requests.get(domain, timeout=30, headers={
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    })
+                    }, allow_redirects=True)  # Allow redirects to catch expiration pages
                     
                     print(f"Response status code: {response.status_code}")
+                    print(f"Final URL after redirects: {response.url}")
                     
-                    # Skip 404 errors as they're considered "good" now
+                    # Handle different response status codes
                     if response.status_code == 404:
                         print(f"✓ URL returns 404 (acceptable): {domain}")
                         continue
+                    elif response.status_code >= 500:
+                        error_msg = f"⚠️ Server error for URL {domain}: Status {response.status_code}"
+                        failing_domains.append(error_msg)
+                        print(error_msg)
+                        continue
+                    elif response.status_code >= 400:
+                        error_msg = f"⚠️ Client error for URL {domain}: Status {response.status_code}"
+                        failing_domains.append(error_msg)
+                        print(error_msg)
+                        continue
                     
-                    # Get the full page content
+                    # Get and parse content
                     print("Getting page content...")
                     response_text = response.text.lower()
                     
-                    # Parse HTML for better analysis
                     print("Parsing HTML content...")
                     soup = BeautifulSoup(response_text, 'html.parser')
                     
-                    # Check meta tags and title with proper error handling
-                    print("Analyzing page elements...")
-                    meta_content = ''
-                    try:
-                        meta_tags = soup.find_all('meta')
-                        meta_content = ' '.join([meta.get('content', '').lower() for meta in meta_tags if meta.get('content')])
-                    except Exception as e:
-                        print(f"Warning: Error processing meta tags: {str(e)}")
-                    
-                    title_content = ''
+                    # Get title with proper error handling
+                    title = None
                     try:
                         if soup.title and soup.title.string:
-                            title_content = soup.title.string.lower()
+                            title = soup.title.string.strip()
+                            print(f"Page title: {title}")
                     except Exception as e:
                         print(f"Warning: Error processing title: {str(e)}")
                     
-                    # Get all text content including hidden elements
+                    # Get visible text content
                     all_text = ''
                     try:
                         all_text = ' '.join([text.lower() for text in soup.stripped_strings])
                     except Exception as e:
                         print(f"Warning: Error processing page text: {str(e)}")
                     
-                    # Combine all content for checking
-                    print("Combining content for analysis...")
-                    combined_content = f"{response_text} {meta_content} {title_content} {all_text}"
+                    # Analyze domain status with the final URL and title
+                    is_expired, reason = analyze_domain_status(all_text, domain, response.url, title)
                     
-                    # Get expiration indicators
-                    expiration_indicators = get_domain_expiration_indicators()
-                    
-                    # Count how many indicators we find
-                    print("Checking for expiration indicators...")
-                    found_indicators = [ind for ind in expiration_indicators if ind in combined_content]
-                    
-                    # Check for parking page patterns
-                    print("Checking parking patterns...")
-                    parking_patterns = [
-                        lambda s: bool(re.search(r'domain.*(?:sale|expired|buy)', s)),
-                        lambda s: bool(re.search(r'(?:buy|purchase).*domain', s)),
-                        lambda s: bool(re.search(r'(?:parked|parking).*domain', s)),
-                    ]
-                    
-                    pattern_matches = [p(combined_content) for p in parking_patterns]
-                    
-                    # Consider domain expired if we find at least 2 indicators or pattern matches
-                    if len(found_indicators) >= 2 or sum(pattern_matches) >= 2:
-                        error_msg = f"🕒 Expired domain detected: {domain}\nFound indicators: {', '.join(found_indicators)}"
+                    if is_expired:
+                        error_msg = f"🕒 Expired domain detected: {domain}\n{reason}"
                         failing_domains.append(error_msg)
                         print(error_msg)
-                        continue
-                    
-                    print(f"✓ URL appears healthy: {domain}")
+                    else:
+                        print(f"✓ URL appears healthy: {domain}")
                     
                 except requests.exceptions.RequestException as e:
-                    error_msg = f"⚠️ Error checking URL {domain}: {str(e)}"
+                    if isinstance(e, requests.exceptions.SSLError):
+                        error_msg = f"⚠️ SSL Certificate error for {domain}"
+                    elif isinstance(e, requests.exceptions.ConnectionError):
+                        error_msg = f"⚠️ Cannot establish connection to {domain}"
+                    elif isinstance(e, requests.exceptions.Timeout):
+                        error_msg = f"⚠️ Connection timed out for {domain}"
+                    else:
+                        error_msg = f"⚠️ Error accessing {domain}: {str(e)}"
+                    
                     print(error_msg)
-                    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
-                        failing_domains.append(error_msg)
+                    failing_domains.append(error_msg)
                 except Exception as e:
-                    error_msg = f"❌ Unexpected error checking URL {domain}: {str(e)}"
+                    error_msg = f"❌ Unexpected error checking {domain}: {str(e)}"
                     print(error_msg)
                     failing_domains.append(error_msg)
             
