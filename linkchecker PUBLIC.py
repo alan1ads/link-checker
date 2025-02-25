@@ -134,29 +134,41 @@ async def check_links():
                         
                     # Check for domain expiration in the response text
                     response_text = response.text.lower()
-                    expiration_phrases = [
-                        "domain has expired",
+                    
+                    # Common expiration patterns
+                    expiration_patterns = [
+                        "the domain has expired",
+                        "is this your domain?",
                         "renew now",
-                        "domain expired",
-                        "this domain expired",
-                        "domain registration expired",
-                        "domain name expired",
-                        "expired on",
-                        "parked domain",
-                        "domain is expired"
+                        "this domain has expired",
+                        "domain registration has expired",
+                        "this domain name expired",
+                        "this domain is expired",
+                        "domain has been expired",
+                        "domain renewal",
+                        "expired domain",
+                        "domain expiration",
+                        "domain expired on"
                     ]
                     
-                    if any(phrase in response_text for phrase in expiration_phrases):
-                        error_msg = f"🕒 Expired domain detected: {domain}"
+                    # Check for specific text patterns
+                    expired = False
+                    for pattern in expiration_patterns:
+                        if pattern in response_text:
+                            expired = True
+                            break
+                    
+                    # Additional check for the specific pattern from your screenshot
+                    if ("domain has expired" in response_text and 
+                        "is this your domain" in response_text and 
+                        "renew now" in response_text):
+                        expired = True
+                    
+                    if expired:
+                        error_msg = f"🕒 Expired domain detected: {domain}\nReason: Domain expiration page detected"
                         failing_domains.append(error_msg)
                         print(error_msg)
                         continue
-                        
-                    # Check for other non-200 status codes
-                    if response.status_code != 200:
-                        error_msg = f"🚨 URL not accessible: {domain}\nStatus: {response.status_code}"
-                        failing_domains.append(error_msg)
-                        print(error_msg)
                         
                 except requests.exceptions.RequestException as e:
                     # Only report connection errors and timeouts
