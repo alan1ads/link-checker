@@ -10,6 +10,11 @@ import os
 from dotenv import load_dotenv
 import re
 from bs4 import BeautifulSoup  # Add BeautifulSoup for better HTML parsing
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # Load environment variables
 load_dotenv()
@@ -90,43 +95,83 @@ def get_domain_expiration_indicators():
         ]
     }
 
-def analyze_domain_status(content, domain, response_url, title):
+def setup_selenium():
+    chrome_options = Options()
+    chrome_options.add_argument('--headless=new')  # New headless mode
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--ignore-certificate-errors')
+    chrome_options.add_argument('--disable-http2')  # Disable HTTP/2 to avoid protocol errors
+    chrome_options.add_argument('--disable-javascript-harmony-shipping')
+    chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    
+    # Add experimental options
+    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+    chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    return webdriver.Chrome(options=chrome_options)
+
+def analyze_domain_status(content, domain, response_url, title, driver=None):
     """
     Analyze domain content to determine if it's truly expired.
-    Enhanced version to handle various page structures and content loading methods.
+    Now handles both static and JavaScript-rendered content.
     """
     try:
-        # Print raw HTML for debugging
-        print("\n=== DEBUG: Raw HTML ===")
-        print(content[:2000])  # Show more content for debugging
-        
-        # Parse with both html.parser and lxml to catch more content
+        # First try with regular HTML content
         soup = BeautifulSoup(content, 'html.parser')
-        
-        # Extract text from multiple sources
         text_sources = []
         
-        # Get all text content, including hidden elements
-        all_text = soup.get_text(separator=' ', strip=True).lower()
-        text_sources.append(all_text)
-        print(f"\n=== DEBUG: All text content ===\n{all_text[:500]}")
+        # If we have a Selenium driver, get the JavaScript-rendered content
+        if driver:
+            try:
+                print("\n=== Getting JavaScript-rendered content ===")
+                driver.get(domain)
+                
+                # Wait for body and potential dynamic content
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                
+                # Additional wait for any dynamic content
+                time.sleep(3)
+                
+                # Get the rendered HTML
+                rendered_html = driver.page_source
+                print("\n=== DEBUG: Rendered HTML ===")
+                print(rendered_html[:2000])
+                
+                # Parse rendered content
+                rendered_soup = BeautifulSoup(rendered_html, 'html.parser')
+                
+                # Look specifically for spans with the expiration message
+                for span in rendered_soup.find_all('span'):
+                    text = span.get_text(strip=True).lower()
+                    if text:
+                        text_sources.append(text)
+                        print(f"Found span text: {text}")
+                        # If we find the exact message, return immediately
+                        if "the domain has expired. is this your domain?" in text:
+                            return True, "Found exact domain expiration message in rendered content"
+                
+                # Get all visible text from the rendered page
+                rendered_text = rendered_soup.get_text(separator=' ', strip=True).lower()
+                text_sources.append(rendered_text)
+                print(f"\n=== DEBUG: Rendered text content ===\n{rendered_text[:500]}")
+                
+            except Exception as e:
+                print(f"Error getting JavaScript content: {e}")
         
-        # Look for specific span with style attributes (common in expired domain pages)
-        for span in soup.find_all('span', style=True):
-            if 'font-family:Arial' in span.get('style', ''):
-                text = span.get_text(strip=True).lower()
-                text_sources.append(text)
-                print(f"Found styled span text: {text}")
-        
-        # Check for specific elements that might contain the expiration message
-        for tag in soup.find_all(['span', 'div', 'p', 'h1', 'h2', 'h3']):
-            if tag.get('style') or tag.get('class'):
-                text = tag.get_text(strip=True).lower()
-                text_sources.append(text)
-                print(f"Found styled element text: {text}")
+        # Get static content as well
+        static_text = soup.get_text(separator=' ', strip=True).lower()
+        text_sources.append(static_text)
         
         # Combine all text sources
         full_text = ' '.join(text_sources)
+        print(f"\n=== DEBUG: Combined text from all sources ===\n{full_text[:500]}")
         
         # Look for the exact expiration message pattern
         exact_pattern = "the domain has expired. is this your domain?"
@@ -160,8 +205,10 @@ def analyze_domain_status(content, domain, response_url, title):
 
 async def check_links():
     try:
-        print("Attempting to connect to Google Sheet...")
+        print("Setting up Selenium...")
+        driver = setup_selenium()
         
+        print("Attempting to connect to Google Sheet...")
         try:
             spreadsheet = creds.open_by_key(SHEET_URL)
             sheet = next((ws for ws in spreadsheet.worksheets() if ws.id == 0), None)
@@ -189,9 +236,8 @@ async def check_links():
                     print(f"Response status code: {response.status_code}")
                     print(f"Final URL after redirects: {response.url}")
                     
-                    # Only analyze content for 200 responses or 403s
                     if response.status_code == 200 or response.status_code == 403:
-                        is_expired, reason = analyze_domain_status(response.text, domain, response.url, None)
+                        is_expired, reason = analyze_domain_status(response.text, domain, response.url, None, driver)
                         if is_expired:
                             error_msg = f"🕒 Expired domain detected: {domain}\n{reason}"
                             failing_domains.append(error_msg)
@@ -214,7 +260,6 @@ async def check_links():
                     failing_domains.append(error_msg)
                     print(error_msg)
             
-            # Send notifications only for real issues
             if failing_domains:
                 print("\nSending notifications for failing domains...")
                 batch_size = 20
@@ -226,11 +271,10 @@ async def check_links():
                 print("\nAll URLs are healthy")
                 send_slack_message("✅ All URLs are functioning correctly")
                 
-        except Exception as e:
-            error_msg = f"Error in sheet processing: {str(e)}"
-            print(error_msg)
-            send_slack_message(f"❌ {error_msg}")
-            
+        finally:
+            print("Closing Selenium browser...")
+            driver.quit()
+                
     except Exception as e:
         error_msg = f"Critical error in check_links: {str(e)}"
         print(error_msg)
