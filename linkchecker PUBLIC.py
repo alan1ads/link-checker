@@ -138,14 +138,14 @@ def analyze_domain_status(content, domain, response_url, title, driver=None):
                 # Get the page source and look for expiration messages
                 page_text = driver.page_source.lower()
                 
-                # Common expiration message patterns
+                # Common expiration message patterns (keeping existing ones that work)
                 expiration_patterns = [
                     # Exact matches from screenshot
                     "the domain has expired. is this your domain?",
                     "the domain has expired. is this your domain? renew now",
                     "domain has expired. renew now",
                     
-                    # Common variations
+                    # Common variations that were working
                     "this domain has expired",
                     "domain name has expired",
                     "domain registration has expired",
@@ -163,13 +163,47 @@ def analyze_domain_status(content, domain, response_url, title, driver=None):
                     "domain expiration notice"
                 ]
                 
-                # Check for any of the patterns
+                # First check: Look for exact patterns in the page source
                 for pattern in expiration_patterns:
                     if pattern in page_text:
                         print(f"Found expiration message: {pattern}")
                         return True, f"Found domain expiration message: {pattern}"
                 
-                # Check specifically styled spans (common in expiration pages)
+                # Second check: Look for the specific layout from the screenshot
+                try:
+                    # Check for "Related searches" section which often appears on expired pages
+                    related_searches = driver.find_elements(By.XPATH, "//*[contains(text(), 'Related searches')]")
+                    if related_searches:
+                        # Look for the expiration message near the Related searches
+                        nearby_text = driver.find_element(By.XPATH, "//body").text.lower()
+                        if "domain has expired" in nearby_text or "the domain has expired" in nearby_text:
+                            return True, "Found expired domain page with Related searches section"
+                    
+                    # Check for red "Renew now" link
+                    renew_links = driver.find_elements(By.XPATH, "//a[contains(translate(text(), 'RENOW', 'renow'), 'renew now')]")
+                    for link in renew_links:
+                        try:
+                            # Check if the link is red (common in expired domain pages)
+                            style = link.get_attribute('style')
+                            if style and ('color: red' in style.lower() or 'color:#' in style.lower()):
+                                nearby_text = link.find_element(By.XPATH, "./ancestor::div[3]").text.lower()
+                                if "domain" in nearby_text and "expired" in nearby_text:
+                                    return True, "Found expired domain page with red Renew now link"
+                        except Exception:
+                            continue
+                    
+                    # Check for centered text container with expiration message
+                    centered_texts = driver.find_elements(By.XPATH, 
+                        "//div[contains(@style, 'text-align: center') or contains(@class, 'center')]")
+                    for element in centered_texts:
+                        text = element.text.lower()
+                        if "domain has expired" in text or "the domain has expired" in text:
+                            return True, "Found centered expired domain message"
+                            
+                except Exception as e:
+                    print(f"Error in layout check: {e}")
+                
+                # Keep existing span checks that were working
                 span_selectors = [
                     "span[style*='font-family:Arial']",
                     "span[style*='font-size']",
