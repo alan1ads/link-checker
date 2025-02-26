@@ -66,15 +66,12 @@ def is_valid_url(url):
 
 def get_domain_expiration_indicators():
     return {
-        # Definitive expiration messages (these almost always indicate a truly expired domain)
-        'definitive': [
-            'this domain has expired and is pending renewal or deletion',
-            'domain has expired and is pending renewal',
-            'this domain expired on',
-            'this domain name has expired',
-            'domain name registration has expired',
-            'this domain name expired on',
-            'this domain has expired and is now suspended',
+        # Exact patterns from common expired domain pages
+        'exact_patterns': [
+            'the domain has expired. is this your domain?',
+            'the domain has expired. is this your domain? renew now',
+            'domain has expired. renew now',
+            'the domain has expired.',
         ],
         # Common registrar expiration pages
         'registrar_patterns': [
@@ -83,84 +80,134 @@ def get_domain_expiration_indicators():
             'expired.domain',
             'domainexpired',
             'domain-expired',
+        ],
+        # Link text patterns that often appear with expired domains
+        'link_patterns': [
+            'renew now',
+            'renew domain',
+            'restore domain',
+            'reactivate domain'
         ]
     }
 
 def analyze_domain_status(content, domain, response_url, title):
     """
     Analyze domain content to determine if it's truly expired.
-    Uses multiple factors including URL, title, and content patterns.
+    Uses multiple approaches to detect expired domains.
     """
-    indicators = get_domain_expiration_indicators()
+    # Parse the content once
+    soup = BeautifulSoup(content, 'html.parser')
     
-    # Check if we were redirected to a known expiration page
-    for pattern in indicators['registrar_patterns']:
-        if pattern in response_url.lower():
-            return True, f"Redirected to registrar expiration page: {response_url}"
+    # Get all text content, including hidden elements
+    all_text = ' '.join([text.lower() for text in soup.stripped_strings])
     
-    # Look for definitive expiration messages
-    for msg in indicators['definitive']:
-        if msg in content:
-            # Verify the context isn't part of a news article or blog post
-            # by checking if it appears in a prominent position
-            soup = BeautifulSoup(content, 'html.parser')
-            main_content = soup.find('main') or soup.find('body')
-            if main_content:
-                first_paragraph = main_content.find('p')
-                if first_paragraph and msg in first_paragraph.text.lower():
-                    return True, f"Found definitive expiration message in main content: {msg}"
-    
-    # Check for specific expiration patterns that are highly reliable
-    expiration_patterns = [
-        # Date-based expiration messages
-        r'domain\s+expired\s+on\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}',
-        r'expiration\s+date:\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}',
-        # Registrar-specific patterns
-        r'registrar:\s+domain\s+expired',
-        r'domain\s+status:\s+expired',
+    # 1. Check for standard expiration messages
+    expiration_phrases = [
+        'domain has expired',
+        'domain expired',
+        'domain name expired',
+        'expired domain',
+        'this domain is expired',
+        'domain registration expired',
     ]
     
-    for pattern in expiration_patterns:
-        match = re.search(pattern, content, re.IGNORECASE)
-        if match:
-            # Extract the matched text for context
-            return True, f"Found specific expiration pattern: {match.group(0)}"
+    # 2. Look for common page structures that indicate expiration
+    def check_page_structure():
+        # Look for short pages with minimal content (typical of expired domains)
+        main_content = soup.find('body')
+        if main_content:
+            text_content = main_content.get_text(strip=True).lower()
+            # If page is suspiciously short and contains key terms
+            if len(text_content) < 1000 and ('domain' in text_content and 'expired' in text_content):
+                return True
+        return False
     
-    # Check page title for definitive indicators
-    if title:
-        title_lower = title.lower()
-        if any(msg in title_lower for msg in indicators['definitive']):
-            return True, f"Found expiration message in page title: {title}"
+    # 3. Check for renewal/restoration links or buttons
+    def check_renewal_elements():
+        renewal_terms = ['renew', 'restore', 'reactivate', 'purchase']
+        
+        # Check link texts
+        links = soup.find_all('a')
+        link_texts = [link.get_text().lower().strip() for link in links]
+        
+        # Check button texts
+        buttons = soup.find_all(['button', 'input'])
+        button_texts = [btn.get('value', '').lower() for btn in buttons]
+        button_texts.extend([btn.get_text().lower().strip() for btn in buttons])
+        
+        # Combine all interactive elements
+        all_elements = link_texts + button_texts
+        return any(any(term in element for term in renewal_terms) for element in all_elements)
     
-    # Check for common expired domain parking pages
-    parking_indicators = {
-        'title_patterns': [
-            'expired domain',
-            'domain expired',
-            'expired website',
-        ],
-        'content_patterns': [
-            'this domain has expired',
-            'renew this domain',
-            'domain registration expired',
+    # 4. Check for typical expired domain page layout
+    def check_page_layout():
+        # Look for centered text containers (common in expired pages)
+        centered_divs = soup.find_all('div', style=lambda s: s and ('center' in s.lower() or 'margin: auto' in s.lower()))
+        for div in centered_divs:
+            text = div.get_text().lower()
+            if 'domain' in text and ('expired' in text or 'renew' in text):
+                return True
+        return False
+    
+    # 5. Check for registrar-specific patterns
+    def check_registrar_patterns():
+        registrar_indicators = {
+            'godaddy': ['godaddy', 'domain expired on godaddy'],
+            'namecheap': ['namecheap', 'expired.namecheap'],
+            'name.com': ['name.com', 'expired.name.com'],
+            'network solutions': ['networksolutions', 'renew.web.com'],
+            'enom': ['enom', 'domainexpired.com'],
+        }
+        
+        for registrar, patterns in registrar_indicators.items():
+            if any(pattern in response_url.lower() for pattern in patterns):
+                return True, f"Detected {registrar} expiration page"
+        return False, None
+    
+    # 6. Check for common expired domain redirects
+    def check_redirects():
+        redirect_patterns = [
+            'expired.domain',
+            'domainexpired',
+            'domain-expired',
+            'expireddomains',
+            'domain.pending',
         ]
-    }
+        return any(pattern in response_url.lower() for pattern in redirect_patterns)
     
-    # Only consider parking if we see multiple strong indicators
-    parking_matches = []
-    if title:
-        title_lower = title.lower()
-        for pattern in parking_indicators['title_patterns']:
-            if pattern in title_lower:
-                parking_matches.append(f"Title: {pattern}")
+    # Combine all checks
+    reasons = []
     
-    for pattern in parking_indicators['content_patterns']:
-        if pattern in content:
-            parking_matches.append(f"Content: {pattern}")
+    # Check registrar patterns first
+    is_registrar, registrar_reason = check_registrar_patterns()
+    if is_registrar:
+        reasons.append(registrar_reason)
     
-    # Require at least two strong parking indicators
-    if len(parking_matches) >= 2:
-        return True, f"Multiple parking indicators found: {', '.join(parking_matches)}"
+    # Check for expiration phrases in main content
+    found_phrases = [phrase for phrase in expiration_phrases if phrase in all_text]
+    if found_phrases:
+        reasons.append(f"Found expiration phrases: {', '.join(found_phrases)}")
+    
+    # Check page structure
+    if check_page_structure():
+        reasons.append("Page structure indicates expired domain")
+    
+    # Check for renewal elements
+    if check_renewal_elements():
+        reasons.append("Found renewal/restoration elements")
+    
+    # Check page layout
+    if check_page_layout():
+        reasons.append("Page layout matches expired domain pattern")
+    
+    # Check redirects
+    if check_redirects():
+        reasons.append("Domain redirects to expiration page")
+    
+    # Make final decision
+    # If we have multiple indicators or a registrar pattern, consider it expired
+    if len(reasons) >= 2 or is_registrar:
+        return True, "\n".join(reasons)
     
     return False, None
 
