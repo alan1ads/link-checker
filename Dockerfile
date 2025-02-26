@@ -16,9 +16,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Chrome for Testing and ChromeDriver
-RUN wget -q "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/120.0.6099.109/linux64/chrome-linux64.zip" \
-    && wget -q "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/120.0.6099.109/linux64/chromedriver-linux64.zip" \
+# Install matching Chrome for Testing and ChromeDriver (version 133)
+RUN wget -q "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/133.0.6943.141/linux64/chrome-linux64.zip" \
+    && wget -q "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/133.0.6943.141/linux64/chromedriver-linux64.zip" \
     && unzip chrome-linux64.zip \
     && unzip chromedriver-linux64.zip \
     && mv chrome-linux64/chrome /usr/local/bin/ \
@@ -36,7 +36,8 @@ RUN pip install -r requirements.txt
 # Copy application file
 COPY ["linkchecker PUBLIC.py", "./linkchecker PUBLIC.py"]
 
-# Set display for Chrome
+# Set Chrome binary path and display
+ENV CHROME_BIN=/usr/local/bin/chrome
 ENV DISPLAY=:99
 
 # Start the worker
