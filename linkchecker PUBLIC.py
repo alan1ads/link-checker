@@ -93,66 +93,114 @@ def get_domain_expiration_indicators():
 def analyze_domain_status(content, domain, response_url, title):
     """
     Analyze domain content to determine if it's truly expired.
-    Focuses on actual content visible in the webpage.
+    Enhanced version to handle various page structures and content loading methods.
     """
-    # Parse the content once
-    soup = BeautifulSoup(content, 'html.parser')
-    
-    # DEBUG: Print raw HTML to see what we're getting
-    print("\n=== DEBUG: Raw HTML snippet ===")
-    print(content[:500])  # First 500 chars of raw HTML
-    
-    # DEBUG: Print parsed structure
-    print("\n=== DEBUG: Page Structure ===")
-    for tag in soup.find_all(['title', 'h1', 'h2', 'p', 'div']):
-        print(f"{tag.name}: {tag.get_text().strip()[:100]}")
-    
-    # Get all visible text from the page, preserving some structure
-    all_text = []
-    for element in soup.stripped_strings:
-        text = element.lower().strip()
-        if text:  # Only add non-empty strings
-            all_text.append(text)
-            # DEBUG: Print each text element we find
-            print(f"Found text: {text[:100]}")
-    
-    # Join all text pieces, preserving their original separation
-    full_text = ' '.join(all_text)
-    print(f"\n=== DEBUG: Full processed text for {domain} ===")
-    print(full_text)
-    
-    # Look for the exact expiration message pattern
-    if "the domain has expired. is this your domain?" in full_text:
-        print("Found exact expiration message!")
-        return True, "Found standard domain expiration message"
-    
-    # Look for variations of the expiration message
-    expiration_patterns = [
-        "domain has expired",
-        "this domain has expired",
-        "domain is expired",
-        "expired domain",
-        "domain name has expired"
-    ]
-    
-    # Check each pattern
-    for pattern in expiration_patterns:
-        if pattern in full_text:
-            # When we find a potential match, look at the surrounding context
-            # Find the full sentence or section containing this pattern
-            words = full_text.split()
-            for i, word in enumerate(words):
-                if pattern in ' '.join(words[i:i+len(pattern.split())]):
-                    # Get some context (10 words before and after for better context)
-                    start = max(0, i-10)
-                    end = min(len(words), i+len(pattern.split())+10)
-                    context = ' '.join(words[start:end])
-                    print(f"\n=== DEBUG: Found expiration pattern with context ===")
-                    print(f"Pattern: {pattern}")
-                    print(f"Context: {context}")
-                    return True, f"Found expiration message: {context}"
-    
-    return False, None
+    try:
+        # Parse the content with different parsers to ensure we catch everything
+        soup = BeautifulSoup(content, 'html.parser')
+        
+        # Extract text from multiple sources
+        text_sources = []
+        
+        # 1. Get text from standard tags with better structure handling
+        for tag in soup.find_all(['p', 'div', 'span', 'h1', 'h2', 'h3', 'title', 'a', 'button']):
+            text = tag.get_text(strip=True)
+            if text:
+                text_sources.append(text.lower())
+                print(f"Standard tag text: {text[:200]}")
+                
+                # Check href for renewal links
+                if tag.name == 'a' and tag.get('href'):
+                    href = tag.get('href').lower()
+                    if any(domain in href for domain in ['namecheap.com', 'godaddy.com', 'renew', 'restore']):
+                        text_sources.append(f"renewal link found: {href}")
+        
+        # 2. Check iframes with better error handling
+        for iframe in soup.find_all('iframe'):
+            src = iframe.get('src', '')
+            if src:
+                print(f"Found iframe with src: {src}")
+                try:
+                    iframe_response = requests.get(src, timeout=10)
+                    iframe_soup = BeautifulSoup(iframe_response.text, 'html.parser')
+                    iframe_text = iframe_soup.get_text(strip=True)
+                    text_sources.append(iframe_text.lower())
+                    print(f"Iframe content: {iframe_text[:200]}")
+                except Exception as e:
+                    print(f"Could not fetch iframe content: {e}")
+        
+        # 3. Check for text in attributes with expanded attribute list
+        for tag in soup.find_all(True):
+            for attr in ['data-content', 'aria-label', 'title', 'alt', 'placeholder', 'data-text']:
+                if attr_text := tag.get(attr):
+                    text_sources.append(attr_text.lower())
+                    print(f"Attribute text ({attr}): {attr_text}")
+        
+        # Combine all text sources
+        full_text = ' '.join(text_sources)
+        
+        # Define comprehensive patterns to check (case insensitive)
+        expiration_patterns = [
+            r"domain has expired",
+            r"this domain has expired",
+            r"the domain has expired",
+            r"domain is expired",
+            r"expired domain",
+            r"domain name has expired",
+            r"renew now",
+            r"domain renewal",
+            r"domain expiration",
+            r"domain not found",
+            r"domain doesn't exist",
+            r"domain does not exist",
+            r"domain registration expired",
+            r"this domain is not active"
+        ]
+        
+        # Check for registrar-specific patterns
+        registrar_patterns = [
+            r"namecheap\.com/renew",
+            r"godaddy\.com/renew",
+            r"expired\.domains",
+            r"domain\.com/renew",
+            r"restore-domain"
+        ]
+        
+        # First check for exact expiration message
+        if "the domain has expired. is this your domain?" in full_text.lower():
+            return True, "Found exact domain expiration message"
+        
+        # Then check for pattern combinations
+        for pattern in expiration_patterns:
+            matches = re.finditer(pattern, full_text, re.I)
+            for match in matches:
+                # Get context around the match
+                start = max(0, match.start() - 100)
+                end = min(len(full_text), match.end() + 100)
+                context = full_text[start:end]
+                
+                # Check if there's a registrar pattern near the match
+                for reg_pattern in registrar_patterns:
+                    if re.search(reg_pattern, full_text, re.I):
+                        return True, f"Found expiration message with registrar reference: {context}"
+                
+                # If we found a strong expiration message, return true
+                if any(strong_pattern in pattern.lower() for strong_pattern in [
+                    "domain has expired",
+                    "the domain has expired",
+                    "domain is expired"
+                ]):
+                    return True, f"Found strong expiration message: {context}"
+                
+                # For weaker patterns, look for supporting evidence
+                if "renew" in full_text.lower() or "restore" in full_text.lower():
+                    return True, f"Found expiration message with renewal option: {context}"
+        
+        return False, None
+        
+    except Exception as e:
+        print(f"Error in analyze_domain_status: {str(e)}")
+        return False, None
 
 async def check_links():
     try:
@@ -197,15 +245,6 @@ async def check_links():
                     domains.append(domain)
                     print(f"Found URL in row {i}: {domain}")
             
-            print(f"\nAnalysis:")
-            print(f"Total rows processed: {total_rows}")
-            print(f"Empty domains skipped: {skipped_empty}")
-            print(f"Valid URLs found: {len(domains)}")
-            
-            print(f"\nFirst few URLs to check:")
-            for d in domains[:5]:
-                print(f"  {d}")
-            
             failing_domains = []
             checked_count = 0
             
@@ -225,38 +264,27 @@ async def check_links():
                     
                     print(f"Response status code: {response.status_code}")
                     print(f"Final URL after redirects: {response.url}")
-                    print(f"Content length: {len(response.text)} characters")
                     
-                    # Get and parse content
-                    print("\nGetting page content...")
-                    response_text = response.text
+                    # Handle different status codes
+                    if response.status_code >= 400:
+                        error_type = "🔒" if response.status_code in [401, 403, 407] else "⚠️"
+                        error_msg = f"{error_type} HTTP {response.status_code} error for {domain}"
+                        failing_domains.append(error_msg)
+                        print(error_msg)
+                        
+                        # Try to analyze content even for error responses
+                        try:
+                            is_expired, reason = analyze_domain_status(response.text, domain, response.url, None)
+                            if is_expired:
+                                error_msg = f"🕒 Expired domain detected in error response: {domain}\n{reason}"
+                                failing_domains.append(error_msg)
+                                print(error_msg)
+                        except Exception as e:
+                            print(f"Could not analyze error response content: {str(e)}")
+                        continue
                     
-                    print("Parsing HTML content...")
-                    soup = BeautifulSoup(response_text, 'html.parser')
-                    
-                    # DEBUG: Print encoding information
-                    print(f"Response encoding: {response.encoding}")
-                    print(f"Content type: {response.headers.get('content-type', 'unknown')}")
-                    
-                    # Get title with proper error handling
-                    title = None
-                    try:
-                        if soup.title and soup.title.string:
-                            title = soup.title.string.strip()
-                            print(f"Page title: {title}")
-                    except Exception as e:
-                        print(f"Warning: Error processing title: {str(e)}")
-                    
-                    # Get visible text content
-                    all_text = ''
-                    try:
-                        all_text = ' '.join([text.lower() for text in soup.stripped_strings])
-                    except Exception as e:
-                        print(f"Warning: Error processing page text: {str(e)}")
-                    
-                    # Analyze domain status with the final URL and title
-                    is_expired, reason = analyze_domain_status(all_text, domain, response.url, title)
-                    
+                    # Analyze domain status for successful responses
+                    is_expired, reason = analyze_domain_status(response.text, domain, response.url, None)
                     if is_expired:
                         error_msg = f"🕒 Expired domain detected: {domain}\n{reason}"
                         failing_domains.append(error_msg)
@@ -265,15 +293,7 @@ async def check_links():
                         print(f"✓ URL appears healthy: {domain}")
                     
                 except requests.exceptions.RequestException as e:
-                    if isinstance(e, requests.exceptions.SSLError):
-                        error_msg = f"⚠️ SSL Certificate error for {domain}"
-                    elif isinstance(e, requests.exceptions.ConnectionError):
-                        error_msg = f"⚠️ Cannot establish connection to {domain}"
-                    elif isinstance(e, requests.exceptions.Timeout):
-                        error_msg = f"⚠️ Connection timed out for {domain}"
-                    else:
-                        error_msg = f"⚠️ Error accessing {domain}: {str(e)}"
-                    
+                    error_msg = f"⚠️ Error accessing {domain}: {str(e)}"
                     print(error_msg)
                     failing_domains.append(error_msg)
                 except Exception as e:
@@ -281,8 +301,7 @@ async def check_links():
                     print(error_msg)
                     failing_domains.append(error_msg)
             
-            print(f"\nChecked {checked_count} URLs")
-            
+            # Send notifications in batches
             if failing_domains:
                 print("\nSending notifications for failing domains...")
                 batch_size = 20
@@ -294,12 +313,8 @@ async def check_links():
                 print("\nAll URLs are healthy")
                 send_slack_message("✅ All URLs are functioning correctly")
                 
-        except gspread.exceptions.APIError as e:
-            error_msg = f"API Error when accessing spreadsheet: {str(e)}"
-            print(error_msg)
-            send_slack_message(f"❌ {error_msg}")
         except Exception as e:
-            error_msg = f"Error accessing worksheet: {str(e)}"
+            error_msg = f"Error in sheet processing: {str(e)}"
             print(error_msg)
             send_slack_message(f"❌ {error_msg}")
             
