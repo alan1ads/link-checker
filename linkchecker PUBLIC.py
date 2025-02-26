@@ -118,107 +118,77 @@ def setup_selenium():
 def analyze_domain_status(content, domain, response_url, title, driver=None):
     """
     Analyze domain content to determine if it's truly expired.
-    Enhanced to handle sophisticated JavaScript loading.
+    Checks for various common expiration message patterns.
     """
     try:
-        # First try with regular HTML content
-        soup = BeautifulSoup(content, 'html.parser')
-        text_sources = []
-        
         # If we have a Selenium driver, get the JavaScript-rendered content
         if driver:
             try:
-                print("\n=== Getting JavaScript-rendered content ===")
+                print("\n=== Checking for domain expiration ===")
                 driver.get(domain)
                 
-                # Wait longer for content to load and try multiple times
-                max_attempts = 3
-                for attempt in range(max_attempts):
-                    try:
-                        # Wait for body and any content to load
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.TAG_NAME, "body"))
-                        )
-                        
-                        # Additional wait for dynamic content
-                        time.sleep(5)  # Increased wait time
-                        
-                        # Try different methods to get content
-                        # 1. Check for specific span with Arial font
-                        spans = driver.find_elements(By.CSS_SELECTOR, "span[style*='font-family:Arial']")
-                        for span in spans:
-                            text = span.text.strip().lower()
-                            if text:
-                                text_sources.append(text)
-                                print(f"Found styled span text: {text}")
-                                if "domain has expired" in text:
-                                    return True, f"Found expiration message in styled span: {text}"
-                        
-                        # 2. Check for elements that become visible
-                        elements = driver.find_elements(By.CSS_SELECTOR, "#target, #pk-status-message, .pk-status-message")
-                        for element in elements:
-                            try:
-                                # Wait for element to become visible
-                                WebDriverWait(driver, 5).until(
-                                    EC.visibility_of(element)
-                                )
-                                text = element.text.strip().lower()
-                                if text:
-                                    text_sources.append(text)
-                                    print(f"Found dynamic element text: {text}")
-                            except:
-                                continue
-                        
-                        # 3. Get the entire page source after JavaScript execution
-                        rendered_html = driver.page_source
-                        rendered_soup = BeautifulSoup(rendered_html, 'html.parser')
-                        
-                        # Look for specific patterns in the rendered HTML
-                        for element in rendered_soup.find_all(['span', 'div', 'p', 'h1', 'h2', 'h3']):
-                            text = element.get_text(strip=True).lower()
-                            if text:
-                                text_sources.append(text)
-                                print(f"Found element text: {text}")
-                                if "domain has expired" in text:
-                                    return True, f"Found expiration message: {text}"
-                        
-                        # If we found any content, break the retry loop
-                        if text_sources:
-                            break
-                            
-                        print(f"Attempt {attempt + 1}: Waiting for more content...")
-                        time.sleep(2)  # Wait between attempts
-                        
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} failed: {str(e)}")
-                        if attempt == max_attempts - 1:
-                            print("All attempts to get dynamic content failed")
+                # Wait for body to load
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                
+                # Wait a moment for dynamic content
+                time.sleep(3)
+                
+                # Get the page source and look for expiration messages
+                page_text = driver.page_source.lower()
+                
+                # Common expiration message patterns
+                expiration_patterns = [
+                    # Exact matches from screenshot
+                    "the domain has expired. is this your domain?",
+                    "the domain has expired. is this your domain? renew now",
+                    "domain has expired. renew now",
+                    
+                    # Common variations
+                    "this domain has expired",
+                    "domain name has expired",
+                    "domain registration has expired",
+                    "domain expired",
+                    "expired domain",
+                    "domain is expired",
+                    "domain has lapsed",
+                    "domain registration expired",
+                    "this domain is expired",
+                    "this domain name has expired",
+                    "domain has been expired",
+                    "domain registration has lapsed",
+                    "domain has expired and is pending renewal",
+                    "expired domain name",
+                    "domain expiration notice"
+                ]
+                
+                # Check for any of the patterns
+                for pattern in expiration_patterns:
+                    if pattern in page_text:
+                        print(f"Found expiration message: {pattern}")
+                        return True, f"Found domain expiration message: {pattern}"
+                
+                # Check specifically styled spans (common in expiration pages)
+                span_selectors = [
+                    "span[style*='font-family:Arial']",
+                    "span[style*='font-size']",
+                    "span.expired-domain",
+                    "span.domain-expired",
+                    "div.expired-notice"
+                ]
+                
+                for selector in span_selectors:
+                    spans = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for span in spans:
+                        text = span.text.strip().lower()
+                        for pattern in expiration_patterns:
+                            if pattern in text:
+                                print(f"Found expiration message in styled element: {text}")
+                                return True, f"Found domain expiration message: {text}"
                 
             except Exception as e:
-                print(f"Error getting JavaScript content: {e}")
-        
-        # Combine all text sources
-        full_text = ' '.join(text_sources)
-        print(f"\n=== DEBUG: Combined text from all sources ===\n{full_text[:500]}")
-        
-        # Look for expiration patterns
-        expiration_patterns = [
-            "domain has expired",
-            "this domain has expired",
-            "the domain has expired",
-            "is this your domain",
-            "renew now",
-            "domain renewal"
-        ]
-        
-        for pattern in expiration_patterns:
-            if pattern in full_text.lower():
-                context_start = max(0, full_text.lower().find(pattern) - 50)
-                context_end = min(len(full_text), full_text.lower().find(pattern) + len(pattern) + 50)
-                context = full_text[context_start:context_end]
-                print(f"Found expiration pattern: {pattern}")
-                print(f"Context: {context}")
-                return True, f"Found expiration message: {context}"
+                print(f"Error checking JavaScript content: {e}")
         
         return False, None
         
