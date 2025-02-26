@@ -118,7 +118,7 @@ def setup_selenium():
 def analyze_domain_status(content, domain, response_url, title, driver=None):
     """
     Analyze domain content to determine if it's truly expired.
-    Now handles both static and JavaScript-rendered content.
+    Enhanced to handle sophisticated JavaScript loading.
     """
     try:
         # First try with regular HTML content
@@ -131,59 +131,82 @@ def analyze_domain_status(content, domain, response_url, title, driver=None):
                 print("\n=== Getting JavaScript-rendered content ===")
                 driver.get(domain)
                 
-                # Wait for body and potential dynamic content
-                WebDriverWait(driver, 15).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-                
-                # Additional wait for any dynamic content
-                time.sleep(3)
-                
-                # Get the rendered HTML
-                rendered_html = driver.page_source
-                print("\n=== DEBUG: Rendered HTML ===")
-                print(rendered_html[:2000])
-                
-                # Parse rendered content
-                rendered_soup = BeautifulSoup(rendered_html, 'html.parser')
-                
-                # Look specifically for spans with the expiration message
-                for span in rendered_soup.find_all('span'):
-                    text = span.get_text(strip=True).lower()
-                    if text:
-                        text_sources.append(text)
-                        print(f"Found span text: {text}")
-                        # If we find the exact message, return immediately
-                        if "the domain has expired. is this your domain?" in text:
-                            return True, "Found exact domain expiration message in rendered content"
-                
-                # Get all visible text from the rendered page
-                rendered_text = rendered_soup.get_text(separator=' ', strip=True).lower()
-                text_sources.append(rendered_text)
-                print(f"\n=== DEBUG: Rendered text content ===\n{rendered_text[:500]}")
+                # Wait longer for content to load and try multiple times
+                max_attempts = 3
+                for attempt in range(max_attempts):
+                    try:
+                        # Wait for body and any content to load
+                        WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.TAG_NAME, "body"))
+                        )
+                        
+                        # Additional wait for dynamic content
+                        time.sleep(5)  # Increased wait time
+                        
+                        # Try different methods to get content
+                        # 1. Check for specific span with Arial font
+                        spans = driver.find_elements(By.CSS_SELECTOR, "span[style*='font-family:Arial']")
+                        for span in spans:
+                            text = span.text.strip().lower()
+                            if text:
+                                text_sources.append(text)
+                                print(f"Found styled span text: {text}")
+                                if "domain has expired" in text:
+                                    return True, f"Found expiration message in styled span: {text}"
+                        
+                        # 2. Check for elements that become visible
+                        elements = driver.find_elements(By.CSS_SELECTOR, "#target, #pk-status-message, .pk-status-message")
+                        for element in elements:
+                            try:
+                                # Wait for element to become visible
+                                WebDriverWait(driver, 5).until(
+                                    EC.visibility_of(element)
+                                )
+                                text = element.text.strip().lower()
+                                if text:
+                                    text_sources.append(text)
+                                    print(f"Found dynamic element text: {text}")
+                            except:
+                                continue
+                        
+                        # 3. Get the entire page source after JavaScript execution
+                        rendered_html = driver.page_source
+                        rendered_soup = BeautifulSoup(rendered_html, 'html.parser')
+                        
+                        # Look for specific patterns in the rendered HTML
+                        for element in rendered_soup.find_all(['span', 'div', 'p', 'h1', 'h2', 'h3']):
+                            text = element.get_text(strip=True).lower()
+                            if text:
+                                text_sources.append(text)
+                                print(f"Found element text: {text}")
+                                if "domain has expired" in text:
+                                    return True, f"Found expiration message: {text}"
+                        
+                        # If we found any content, break the retry loop
+                        if text_sources:
+                            break
+                            
+                        print(f"Attempt {attempt + 1}: Waiting for more content...")
+                        time.sleep(2)  # Wait between attempts
+                        
+                    except Exception as e:
+                        print(f"Attempt {attempt + 1} failed: {str(e)}")
+                        if attempt == max_attempts - 1:
+                            print("All attempts to get dynamic content failed")
                 
             except Exception as e:
                 print(f"Error getting JavaScript content: {e}")
-        
-        # Get static content as well
-        static_text = soup.get_text(separator=' ', strip=True).lower()
-        text_sources.append(static_text)
         
         # Combine all text sources
         full_text = ' '.join(text_sources)
         print(f"\n=== DEBUG: Combined text from all sources ===\n{full_text[:500]}")
         
-        # Look for the exact expiration message pattern
-        exact_pattern = "the domain has expired. is this your domain?"
-        if exact_pattern in full_text.lower():
-            print(f"Found exact expiration message!")
-            return True, "Found exact domain expiration message"
-        
-        # Look for variations of the expiration message
+        # Look for expiration patterns
         expiration_patterns = [
             "domain has expired",
             "this domain has expired",
             "the domain has expired",
+            "is this your domain",
             "renew now",
             "domain renewal"
         ]
