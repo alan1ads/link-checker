@@ -133,56 +133,54 @@ def analyze_domain_status(content, domain, response_url, title, driver=None):
                 )
                 
                 # Wait a moment for dynamic content
-                time.sleep(3)
+                time.sleep(5)  # Increased wait time for iframe load
                 
-                # First check: Look for hidden content
                 try:
-                    # Execute JavaScript to make hidden elements visible
+                    # First make the target div visible
                     driver.execute_script("""
-                        var elements = document.querySelectorAll('#target, #sales-banner, [style*="opacity:0"], [style*="visibility:hidden"]');
-                        elements.forEach(function(el) {
-                            el.style.display = 'block';
-                            el.style.opacity = '1';
-                            el.style.visibility = 'visible';
-                        });
+                        var target = document.getElementById('target');
+                        if (target) {
+                            target.style.opacity = '1';
+                            target.style.visibility = 'visible';
+                            target.style.display = 'block';
+                        }
                     """)
                     
-                    # Wait a moment for any animations
-                    time.sleep(2)
-                    
-                    # Check for the specific span in any iframe
-                    iframes = driver.find_elements(By.TAG_NAME, "iframe")
-                    print(f"Found {len(iframes)} iframes")
-                    
-                    for iframe in iframes:
-                        try:
-                            iframe_id = iframe.get_attribute('id')
-                            print(f"Checking iframe: {iframe_id}")
-                            driver.switch_to.frame(iframe)
-                            
-                            # Get all text content
-                            page_content = driver.find_element(By.TAG_NAME, "body").text.lower()
-                            print(f"Content found in iframe {iframe_id}:")
-                            print(page_content[:200] + "...") # Print first 200 chars
-                            
-                            if "the domain has expired" in page_content:
-                                # Double check with specific span
-                                spans = driver.find_elements(By.CSS_SELECTOR, 'span[style*="font-family:Arial"]')
-                                for span in spans:
-                                    text = span.text.strip().lower()
-                                    print(f"Span text: {text}")
-                                    if "domain has expired" in text:
-                                        driver.switch_to.default_content()
-                                        return True, f"Found expired domain message in iframe: {text}"
-                            
-                            driver.switch_to.default_content()
-                        except Exception as e:
-                            print(f"Error checking iframe {iframe_id}: {e}")
-                            driver.switch_to.default_content()
-                            continue
+                    # Look specifically for plFrame
+                    try:
+                        iframe = WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.ID, "plFrame"))
+                        )
+                        print("Found plFrame iframe")
+                        
+                        # Switch to the iframe
+                        driver.switch_to.frame(iframe)
+                        
+                        # Wait for and get the content
+                        WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.TAG_NAME, "span"))
+                        )
+                        
+                        # Get all spans and their text
+                        spans = driver.find_elements(By.TAG_NAME, "span")
+                        for span in spans:
+                            try:
+                                text = span.text.strip().lower()
+                                print(f"Found text in plFrame: {text}")
+                                if "domain has expired" in text:
+                                    driver.switch_to.default_content()
+                                    return True, f"Found expired domain message: {text}"
+                            except Exception as e:
+                                print(f"Error reading span text: {e}")
+                                continue
+                        
+                        driver.switch_to.default_content()
+                    except Exception as e:
+                        print(f"Error with plFrame: {e}")
+                        driver.switch_to.default_content()
                 
                 except Exception as e:
-                    print(f"Error in content check: {e}")
+                    print(f"Error making target visible: {e}")
                 
                 # Keep all existing checks (they're working for other cases)
                 page_text = driver.page_source.lower()
