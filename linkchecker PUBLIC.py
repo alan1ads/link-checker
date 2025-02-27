@@ -259,8 +259,6 @@ async def check_links():
             domains = [row[2].strip() for row in all_values[1:] if len(row) > 2 and row[2].strip()]
             domains = ['http://' + d if not d.startswith(('http://', 'https://')) else d for d in domains]
             
-            # Limit to first 20 domains for testing
-            domains = domains[:20]
             failing_domains = []
             checked_count = 0
             
@@ -278,33 +276,37 @@ async def check_links():
                     print(f"Response status code: {response.status_code}")
                     print(f"Final URL after redirects: {response.url}")
                     
-                    if response.status_code == 200 or response.status_code == 403:
+                    if response.status_code == 200:
                         is_expired, reason = analyze_domain_status(response.text, domain, response.url, None, driver)
                         if is_expired:
-                            error_msg = f"🚫 Domain expired: {domain}"  # Added emoji
+                            error_msg = f"🚫 Domain expired: {domain}"
                             failing_domains.append(error_msg)
                             print(error_msg)
                         else:
                             print(f"✓ URL appears healthy: {domain}")
+                    elif response.status_code == 403:
+                        error_msg = f"🔒 Access Forbidden (403): {domain}"
+                        failing_domains.append(error_msg)
+                        print(error_msg)
                     elif response.status_code != 404:  # Only exclude 404s from reporting
-                        error_msg = f"⚠️ HTTP {response.status_code}: {domain}"  # Added emoji
+                        error_msg = f"⚠️ HTTP {response.status_code}: {domain}"
                         failing_domains.append(error_msg)
                         print(error_msg)
                     else:
                         print(f"404 error for {domain} - not reporting to Slack")
                     
                 except requests.exceptions.RequestException as e:
-                    error_msg = f"❌ Connection Error: {domain}"  # More descriptive with emoji
+                    error_msg = f"❌ Connection Error: {domain}"
                     failing_domains.append(error_msg)
                     print(error_msg)
                 except Exception as e:
-                    error_msg = f"❌ Unexpected Error: {domain}"  # More descriptive with emoji
+                    error_msg = f"❌ Unexpected Error: {domain}"
                     failing_domains.append(error_msg)
                     print(error_msg)
             
             if failing_domains:
                 print("\nSending notifications for failing domains...")
-                message = "🔍 Link Check Results:\n" + "\n".join(failing_domains)  # Added header with emoji
+                message = "🔍 Link Check Results:\n" + "\n".join(failing_domains)
                 send_slack_message(message)
             else:
                 print("\nAll URLs are healthy")
@@ -315,7 +317,7 @@ async def check_links():
             driver.quit()
                 
     except Exception as e:
-        error_msg = f"⚠️ Critical error: {str(e)}"  # Added emoji
+        error_msg = f"⚠️ Critical error: {str(e)}"
         print(error_msg)
         send_slack_message(error_msg)
 
