@@ -135,37 +135,56 @@ def analyze_domain_status(content, domain, response_url, title, driver=None):
                 # Wait a moment for dynamic content
                 time.sleep(3)
                 
-                # First check: Look for content in iframes (for the specific case)
+                # First check: Look for hidden content
                 try:
+                    # Execute JavaScript to make hidden elements visible
+                    driver.execute_script("""
+                        var elements = document.querySelectorAll('#target, #sales-banner, [style*="opacity:0"], [style*="visibility:hidden"]');
+                        elements.forEach(function(el) {
+                            el.style.display = 'block';
+                            el.style.opacity = '1';
+                            el.style.visibility = 'visible';
+                        });
+                    """)
+                    
+                    # Wait a moment for any animations
+                    time.sleep(2)
+                    
+                    # Check for the specific span in any iframe
                     iframes = driver.find_elements(By.TAG_NAME, "iframe")
                     print(f"Found {len(iframes)} iframes")
                     
                     for iframe in iframes:
                         try:
-                            print(f"Checking iframe: {iframe.get_attribute('id')}")
+                            iframe_id = iframe.get_attribute('id')
+                            print(f"Checking iframe: {iframe_id}")
                             driver.switch_to.frame(iframe)
                             
-                            # Look for the specific span with exact styling
-                            spans = driver.find_elements(By.CSS_SELECTOR, 'span[style*="font-family:Arial"][style*="font-size:16px"][style*="color:#888"]')
-                            print(f"Found {len(spans)} matching spans in iframe")
+                            # Get all text content
+                            page_content = driver.find_element(By.TAG_NAME, "body").text.lower()
+                            print(f"Content found in iframe {iframe_id}:")
+                            print(page_content[:200] + "...") # Print first 200 chars
                             
-                            for span in spans:
-                                text = span.text.strip()
-                                print(f"Span text found: {text}")
-                                if "the domain has expired. is this your domain?" in text.lower():
-                                    driver.switch_to.default_content()
-                                    return True, f"Found expired domain message in iframe: {text}"
+                            if "the domain has expired" in page_content:
+                                # Double check with specific span
+                                spans = driver.find_elements(By.CSS_SELECTOR, 'span[style*="font-family:Arial"]')
+                                for span in spans:
+                                    text = span.text.strip().lower()
+                                    print(f"Span text: {text}")
+                                    if "domain has expired" in text:
+                                        driver.switch_to.default_content()
+                                        return True, f"Found expired domain message in iframe: {text}"
                             
                             driver.switch_to.default_content()
                         except Exception as e:
-                            print(f"Error checking iframe: {e}")
+                            print(f"Error checking iframe {iframe_id}: {e}")
                             driver.switch_to.default_content()
                             continue
                 
                 except Exception as e:
-                    print(f"Error in iframe check: {e}")
+                    print(f"Error in content check: {e}")
                 
-                # Get the page source and look for expiration messages (keeping existing checks)
+                # Keep all existing checks (they're working for other cases)
                 page_text = driver.page_source.lower()
                 
                 # Common expiration message patterns (keeping existing ones that work)
