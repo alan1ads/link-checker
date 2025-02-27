@@ -135,7 +135,17 @@ def analyze_domain_status(content, domain, response_url, title, driver=None):
                 # Wait a moment for dynamic content
                 time.sleep(3)
                 
-                # Get the page source and look for expiration messages
+                # First check: Look for the specific Arial span with exact styling
+                try:
+                    spans = driver.find_elements(By.CSS_SELECTOR, 'span[style*="font-family:Arial"][style*="font-size:16px"][style*="color:#888"]')
+                    for span in spans:
+                        text = span.text.strip().lower()
+                        if "the domain has expired. is this your domain?" in text:
+                            return True, "Found exact expired domain message with specific styling"
+                except Exception as e:
+                    print(f"Error checking specific span: {e}")
+                
+                # Get the page source and look for expiration messages (keeping existing checks)
                 page_text = driver.page_source.lower()
                 
                 # Common expiration message patterns (keeping existing ones that work)
@@ -163,63 +173,11 @@ def analyze_domain_status(content, domain, response_url, title, driver=None):
                     "domain expiration notice"
                 ]
                 
-                # First check: Look for exact patterns in the page source
+                # Check for patterns in the page source
                 for pattern in expiration_patterns:
                     if pattern in page_text:
                         print(f"Found expiration message: {pattern}")
                         return True, f"Found domain expiration message: {pattern}"
-                
-                # Second check: Look for the specific layout from the screenshot
-                try:
-                    # Check for "Related searches" section which often appears on expired pages
-                    related_searches = driver.find_elements(By.XPATH, "//*[contains(text(), 'Related searches')]")
-                    if related_searches:
-                        # Look for the expiration message near the Related searches
-                        nearby_text = driver.find_element(By.XPATH, "//body").text.lower()
-                        if "domain has expired" in nearby_text or "the domain has expired" in nearby_text:
-                            return True, "Found expired domain page with Related searches section"
-                    
-                    # Check for red "Renew now" link
-                    renew_links = driver.find_elements(By.XPATH, "//a[contains(translate(text(), 'RENOW', 'renow'), 'renew now')]")
-                    for link in renew_links:
-                        try:
-                            # Check if the link is red (common in expired domain pages)
-                            style = link.get_attribute('style')
-                            if style and ('color: red' in style.lower() or 'color:#' in style.lower()):
-                                nearby_text = link.find_element(By.XPATH, "./ancestor::div[3]").text.lower()
-                                if "domain" in nearby_text and "expired" in nearby_text:
-                                    return True, "Found expired domain page with red Renew now link"
-                        except Exception:
-                            continue
-                    
-                    # Check for centered text container with expiration message
-                    centered_texts = driver.find_elements(By.XPATH, 
-                        "//div[contains(@style, 'text-align: center') or contains(@class, 'center')]")
-                    for element in centered_texts:
-                        text = element.text.lower()
-                        if "domain has expired" in text or "the domain has expired" in text:
-                            return True, "Found centered expired domain message"
-                            
-                except Exception as e:
-                    print(f"Error in layout check: {e}")
-                
-                # Keep existing span checks that were working
-                span_selectors = [
-                    "span[style*='font-family:Arial']",
-                    "span[style*='font-size']",
-                    "span.expired-domain",
-                    "span.domain-expired",
-                    "div.expired-notice"
-                ]
-                
-                for selector in span_selectors:
-                    spans = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for span in spans:
-                        text = span.text.strip().lower()
-                        for pattern in expiration_patterns:
-                            if pattern in text:
-                                print(f"Found expiration message in styled element: {text}")
-                                return True, f"Found domain expiration message: {text}"
                 
             except Exception as e:
                 print(f"Error checking JavaScript content: {e}")
@@ -246,6 +204,8 @@ async def check_links():
             domains = [row[2].strip() for row in all_values[1:] if len(row) > 2 and row[2].strip()]
             domains = ['http://' + d if not d.startswith(('http://', 'https://')) else d for d in domains]
             
+            # Limit to first 20 domains for testing
+            domains = domains[:20]
             failing_domains = []
             checked_count = 0
             
@@ -266,46 +226,43 @@ async def check_links():
                     if response.status_code == 200 or response.status_code == 403:
                         is_expired, reason = analyze_domain_status(response.text, domain, response.url, None, driver)
                         if is_expired:
-                            error_msg = f"🕒 Expired domain detected: {domain}\n{reason}"
+                            error_msg = f"Domain expired: {domain}"  # Simplified message
                             failing_domains.append(error_msg)
                             print(error_msg)
                         else:
                             print(f"✓ URL appears healthy: {domain}")
                     elif response.status_code != 404:  # Only exclude 404s from reporting
-                        error_msg = f"⚠️ HTTP {response.status_code} error for {domain}"
+                        error_msg = f"HTTP {response.status_code}: {domain}"  # Simplified message
                         failing_domains.append(error_msg)
                         print(error_msg)
                     else:
                         print(f"404 error for {domain} - not reporting to Slack")
                     
                 except requests.exceptions.RequestException as e:
-                    error_msg = f"⚠️ Error accessing {domain}: {str(e)}"
+                    error_msg = f"Error: {domain}"  # Simplified message
                     failing_domains.append(error_msg)
                     print(error_msg)
                 except Exception as e:
-                    error_msg = f"❌ Unexpected error checking {domain}: {str(e)}"
+                    error_msg = f"Error: {domain}"  # Simplified message
                     failing_domains.append(error_msg)
                     print(error_msg)
             
             if failing_domains:
                 print("\nSending notifications for failing domains...")
-                batch_size = 20
-                for i in range(0, len(failing_domains), batch_size):
-                    batch = failing_domains[i:i + batch_size]
-                    message = "URL Check Results:\n" + "\n".join(batch)
-                    send_slack_message(message)
+                message = "Issues found:\n" + "\n".join(failing_domains)  # Simplified message format
+                send_slack_message(message)
             else:
                 print("\nAll URLs are healthy")
-                send_slack_message("✅ All URLs are functioning correctly")
+                send_slack_message("All URLs OK")  # Simplified message
                 
         finally:
             print("Closing Selenium browser...")
             driver.quit()
                 
     except Exception as e:
-        error_msg = f"Critical error in check_links: {str(e)}"
+        error_msg = f"Critical error: {str(e)}"  # Simplified message
         print(error_msg)
-        send_slack_message(f"❌ {error_msg}")
+        send_slack_message(error_msg)
 
 async def wait_until_next_run():
     est = pytz.timezone('US/Eastern')
