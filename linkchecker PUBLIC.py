@@ -262,9 +262,6 @@ async def check_links():
             domain_data = [(account, 'http://' + domain if not domain.startswith(('http://', 'https://')) else domain) 
                           for account, domain in domain_data]
             
-            # Limit to first 50 domains for testing
-            domain_data = domain_data[:50]
-            
             failing_domains = []
             checked_count = 0
             
