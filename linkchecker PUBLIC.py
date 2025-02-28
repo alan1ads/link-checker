@@ -256,16 +256,20 @@ async def check_links():
                 raise Exception("Could not find worksheet")
             
             all_values = sheet.get_all_values()
-            domains = [row[2].strip() for row in all_values[1:] if len(row) > 2 and row[2].strip()]
-            domains = ['http://' + d if not d.startswith(('http://', 'https://')) else d for d in domains]
+            # Get both Ad Account Name and domain, skip header row
+            domain_data = [(row[0].strip(), row[2].strip()) for row in all_values[1:] if len(row) > 2 and row[2].strip()]
+            # Add http:// if needed and keep the account name
+            domain_data = [(account, 'http://' + domain if not domain.startswith(('http://', 'https://')) else domain) 
+                          for account, domain in domain_data]
             
             failing_domains = []
             checked_count = 0
             
-            for domain in domains:
+            for account_name, domain in domain_data:
                 checked_count += 1
                 print(f"\n{'='*50}")
-                print(f"Checking URL {checked_count}/{len(domains)}: {domain}")
+                print(f"Checking URL {checked_count}/{len(domain_data)}: {domain}")
+                print(f"Ad Account: {account_name}")
                 print(f"{'='*50}")
                 
                 try:
@@ -279,28 +283,28 @@ async def check_links():
                     if response.status_code == 200:
                         is_expired, reason = analyze_domain_status(response.text, domain, response.url, None, driver)
                         if is_expired:
-                            error_msg = f"🚫 Domain expired: {domain}"
+                            error_msg = f"🚫 Domain expired: {domain} / {account_name}"
                             failing_domains.append(error_msg)
                             print(error_msg)
                         else:
                             print(f"✓ URL appears healthy: {domain}")
                     elif response.status_code == 403:
-                        error_msg = f"🔒 Access Forbidden (403): {domain}"
+                        error_msg = f"🔒 Access Forbidden (403): {domain} / {account_name}"
                         failing_domains.append(error_msg)
                         print(error_msg)
                     elif response.status_code != 404:  # Only exclude 404s from reporting
-                        error_msg = f"⚠️ HTTP {response.status_code}: {domain}"
+                        error_msg = f"⚠️ HTTP {response.status_code}: {domain} / {account_name}"
                         failing_domains.append(error_msg)
                         print(error_msg)
                     else:
                         print(f"404 error for {domain} - not reporting to Slack")
                     
                 except requests.exceptions.RequestException as e:
-                    error_msg = f"❌ Connection Error: {domain}"
+                    error_msg = f"❌ Connection Error: {domain} / {account_name}"
                     failing_domains.append(error_msg)
                     print(error_msg)
                 except Exception as e:
-                    error_msg = f"❌ Unexpected Error: {domain}"
+                    error_msg = f"❌ Unexpected Error: {domain} / {account_name}"
                     failing_domains.append(error_msg)
                     print(error_msg)
             
