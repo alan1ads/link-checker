@@ -348,9 +348,41 @@ async def check_links():
                         print(f"404 error for {domain} - not reporting to Slack")
                     
                 except requests.exceptions.RequestException as e:
-                    error_msg = f"❌ Connection Error: {domain} / {account_name}"
-                    failing_domains.append(error_msg)
-                    print(error_msg)
+                    # Check for DNS-related errors in the exception text
+                    error_str = str(e).lower()
+                    if any(phrase in error_str for phrase in [
+                        "name or service not known", 
+                        "nodename nor servname provided",
+                        "cannot resolve",
+                        "name resolution",
+                        "getaddrinfo failed",
+                        "dns",
+                        "nxdomain"
+                    ]):
+                        print(f"DNS resolution error for {domain} - not reporting to Slack")
+                        
+                        # Try with Selenium as a fallback to confirm it's DNS_PROBE_FINISHED_NXDOMAIN
+                        try:
+                            driver.get(domain)
+                            WebDriverWait(driver, 5).until(
+                                EC.presence_of_element_located((By.TAG_NAME, "body"))
+                            )
+                            page_source = driver.page_source.lower()
+                            if "dns_probe_finished_nxdomain" in page_source or "this site can't be reached" in page_source:
+                                print(f"Confirmed DNS_PROBE_FINISHED_NXDOMAIN with Selenium for {domain}")
+                            else:
+                                # If Selenium can access it but requests couldn't, it might be a different issue
+                                # In this case, we should report it
+                                error_msg = f"❌ Connection Error: {domain} / {account_name}"
+                                failing_domains.append(error_msg)
+                                print(error_msg)
+                        except Exception:
+                            # If Selenium also fails, it's most likely a DNS issue, so don't report
+                            pass
+                    else:
+                        error_msg = f"❌ Connection Error: {domain} / {account_name}"
+                        failing_domains.append(error_msg)
+                        print(error_msg)
                 except Exception as e:
                     error_msg = f"❌ Unexpected Error: {domain} / {account_name}"
                     failing_domains.append(error_msg)
