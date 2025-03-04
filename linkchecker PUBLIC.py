@@ -280,7 +280,52 @@ async def check_links():
                     print(f"Response status code: {response.status_code}")
                     print(f"Final URL after redirects: {response.url}")
                     
-                    if response.status_code == 200:
+                    # Check for Error 1000 or DNS_PROBE_FINISHED_NXDOMAIN in the content
+                    has_special_error = False
+                    
+                    # First check in the response text
+                    response_text_lower = response.text.lower()
+                    if "error 1000" in response_text_lower:
+                        print(f"Found Error 1000 in response content for {domain}")
+                        has_special_error = True
+                    elif "dns points to prohibited ip" in response_text_lower and "cloudflare" in response_text_lower:
+                        print(f"Found Cloudflare Error 1000 indicators in response content for {domain}")
+                        has_special_error = True
+                    elif "dns_probe_finished_nxdomain" in response_text_lower:
+                        print(f"Found DNS_PROBE_FINISHED_NXDOMAIN in response content for {domain}")
+                        has_special_error = True
+                    
+                    # Use Selenium to check for errors that might only be visible in rendered content
+                    if not has_special_error and response.status_code == 200:
+                        try:
+                            driver.get(domain)
+                            WebDriverWait(driver, 10).until(
+                                EC.presence_of_element_located((By.TAG_NAME, "body"))
+                            )
+                            page_source = driver.page_source.lower()
+                            
+                            # Check for Error 1000
+                            if "error 1000" in page_source:
+                                print(f"Found Error 1000 in rendered content for {domain}")
+                                has_special_error = True
+                            # Check for Cloudflare error patterns
+                            elif "ray id:" in page_source and "cloudflare" in page_source and "dns points to" in page_source:
+                                print(f"Found Cloudflare Error 1000 indicators in rendered content for {domain}")
+                                has_special_error = True
+                            # Check for DNS_PROBE_FINISHED_NXDOMAIN
+                            elif "dns_probe_finished_nxdomain" in page_source:
+                                print(f"Found DNS_PROBE_FINISHED_NXDOMAIN in rendered content for {domain}")
+                                has_special_error = True
+                            # Check for the specific text shown in the screenshot
+                            elif "this site can't be reached" in page_source and "dns_probe_finished_nxdomain" in page_source:
+                                print(f"Found 'This site can't be reached' with DNS_PROBE_FINISHED_NXDOMAIN for {domain}")
+                                has_special_error = True
+                        except Exception as e:
+                            print(f"Error checking for special errors with Selenium: {e}")
+                    
+                    if has_special_error:
+                        print(f"Error 1000 or DNS_PROBE_FINISHED_NXDOMAIN for {domain} - not reporting to Slack")
+                    elif response.status_code == 200:
                         is_expired, reason = analyze_domain_status(response.text, domain, response.url, None, driver)
                         if is_expired:
                             error_msg = f"🚫 Domain expired: {domain} / {account_name}"
